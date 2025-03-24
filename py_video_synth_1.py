@@ -3,6 +3,8 @@ import numpy as np
 import cv2
 import os
 from datetime import datetime
+import torch
+import torch.nn as nn
 
 # Configurable parameters
 WINDOW_SIZE = (800, 800)
@@ -134,6 +136,56 @@ class ReactionDiffusion:
         img = (self.V * 255).astype(np.uint8)
         return img
 
+class TextureGenerator(nn.Module):
+    def __init__(self, nz=100, ngf=64, nc=1):
+        super(TextureGenerator, self).__init__()
+        self.main = nn.Sequential(
+            # Input is Z, going into a convolution
+            nn.ConvTranspose2d(nz, ngf * 8, 4, 1, 0, bias=False),
+            nn.BatchNorm2d(ngf * 8),
+            nn.ReLU(True),
+            # State size: (ngf*8) x 4 x 4
+            nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(ngf * 4),
+            nn.ReLU(True),
+            # State size: (ngf*4) x 8 x 8
+            nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(ngf * 2),
+            nn.ReLU(True),
+            # State size: (ngf*2) x 16 x 16
+            nn.ConvTranspose2d(ngf * 2, ngf, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(ngf),
+            nn.ReLU(True),
+            # State size: (ngf) x 32 x 32
+            nn.ConvTranspose2d(ngf, nc, 4, 2, 1, bias=False),
+            nn.Tanh()  # Output between -1 and 1
+            # Final size: (nc) x 64 x 64
+        )
+
+    def forward(self, input):
+        return self.main(input)
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Instantiate generator
+nz = 100  # Size of latent vector
+generator = TextureGenerator(nz=nz).to(device)
+generator.eval()  # Inference mode
+
+def generate_texture():
+    # Random noise input
+    noise = torch.randn(1, nz, 1, 1, device=device)
+
+    # Generate fake image
+    with torch.no_grad():
+        fake = generator(noise).detach().cpu()
+
+    # Reshape & scale to 0-255 grayscale
+    img = fake.squeeze().numpy()
+    img = ((img + 1) * 127.5).astype(np.uint8)  # Convert [-1,1] to [0,255]
+
+    return img
+
 # Main loop
 def run():
     global record_frames
@@ -188,7 +240,7 @@ def run():
 
         # Generate and draw pattern
         reaction_diffusion.update()
-        pattern = reaction_diffusion.get_pattern()
+        pattern = generate_texture()
 
         draw_pattern(screen, pattern)
 

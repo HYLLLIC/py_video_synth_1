@@ -86,6 +86,54 @@ def export_video():
     out.release()
     print(f"Video exported as {video_file}")
 
+class ReactionDiffusion:
+    def __init__(self, width, height, du=1.0, dv=0.5, feed=0.055, kill=0.062):
+        self.width = width
+        self.height = height
+
+        # Chemical concentrations
+        self.U = np.ones((height, width), dtype=np.float32)
+        self.V = np.zeros((height, width), dtype=np.float32)
+
+        # Seed initial V in the middle
+        self.U[height // 2 - 5: height // 2 + 5, width // 2 - 5: width // 2 + 5] = 0.50
+        self.V[height // 2 - 5: height // 2 + 5, width // 2 - 5: width // 2 + 5] = 0.25
+
+        # Parameters
+        self.du = du
+        self.dv = dv
+        self.feed = feed
+        self.kill = kill
+
+    def laplacian(self, arr):
+        return (
+            -arr
+            + 0.2 * (np.roll(arr, 1, axis=0) + np.roll(arr, -1, axis=0)
+                    + np.roll(arr, 1, axis=1) + np.roll(arr, -1, axis=1))
+            + 0.05 * (np.roll(np.roll(arr, 1, axis=0), 1, axis=1) + np.roll(np.roll(arr, 1, axis=0), -1, axis=1)
+                      + np.roll(np.roll(arr, -1, axis=0), 1, axis=1) + np.roll(np.roll(arr, -1, axis=0), -1, axis=1))
+        )
+
+    def update(self):
+        U = self.U
+        V = self.V
+
+        # Diffusion
+        Lu = self.laplacian(U)
+        Lv = self.laplacian(V)
+
+        # Reaction
+        reaction = U * V * V
+
+        # Update equations
+        self.U += (self.du * Lu - reaction + self.feed * (1 - U))
+        self.V += (self.dv * Lv + reaction - (self.kill + self.feed) * V)
+
+    def get_pattern(self):
+        # Return grayscale image based on V concentration
+        img = (self.V * 255).astype(np.uint8)
+        return img
+
 # Main loop
 def run():
     global record_frames
@@ -95,6 +143,9 @@ def run():
 
     density = 0.5
     speed = 1.0
+
+    # Create Reaction-Diffusion object
+    reaction_diffusion = ReactionDiffusion(GRID_SIZE[0], GRID_SIZE[1])
 
     while running:
         for event in pygame.event.get():
@@ -120,9 +171,25 @@ def run():
                 elif event.key == pygame.K_LEFT:
                     speed = max(speed - 0.1, 0.1)
                     print(f"Speed: {speed}")
+                    
+                elif event.key == pygame.K_w:
+                    reaction_diffusion.feed += 0.001
+                    print(f"Feed: {reaction_diffusion.feed}, Kill: {reaction_diffusion.kill}")
+                elif event.key == pygame.K_s:
+                    reaction_diffusion.feed -= 0.001
+                    print(f"Feed: {reaction_diffusion.feed}, Kill: {reaction_diffusion.kill}")
+                elif event.key == pygame.K_a:
+                    reaction_diffusion.kill -= 0.001
+                    print(f"Feed: {reaction_diffusion.feed}, Kill: {reaction_diffusion.kill}")
+                elif event.key == pygame.K_d:
+                    reaction_diffusion.kill += 0.001
+                    print(f"Feed: {reaction_diffusion.feed}, Kill: {reaction_diffusion.kill}")
+
 
         # Generate and draw pattern
-        pattern = generate_pattern(frame_count, density=density, speed=speed)
+        reaction_diffusion.update()
+        pattern = reaction_diffusion.get_pattern()
+
         draw_pattern(screen, pattern)
 
         # Save frame if recording

@@ -66,7 +66,6 @@ def run():
     frame_count = 0
     running = True
 
-    # Start video capture
     video_capture = cv2.VideoCapture(0)
 
     if not video_capture.isOpened():
@@ -74,6 +73,16 @@ def run():
         return
 
     reaction_diffusion = ReactionDiffusion(GRID_SIZE[0], GRID_SIZE[1])
+
+    # Initialize previous frame for motion detection
+    ret, prev_frame = video_capture.read()
+    if not ret:
+        print("Error: Could not read initial frame.")
+        return
+
+    prev_frame = cv2.rotate(prev_frame, cv2.ROTATE_90_CLOCKWISE)
+    prev_gray_frame = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+    prev_gray_frame = cv2.resize(prev_gray_frame, (GRID_SIZE[0], GRID_SIZE[1]))
 
     while running:
         for event in pygame.event.get():
@@ -85,31 +94,40 @@ def run():
 
         ret, frame = video_capture.read()
 
-        ret, frame = video_capture.read()
-
         if ret:
-            # Rotate the frame 90 degrees clockwise
-            rotated_frame = np.rot90(frame, k=1)  # k=1 => 90 degrees counter-clockwise == 90 clockwise
-
-            # Convert to grayscale after rotation
+            # Rotate and convert frame to grayscale
+            rotated_frame = np.rot90(frame, k=1)  # k=1
             gray_frame = cv2.cvtColor(rotated_frame, cv2.COLOR_BGR2GRAY)
-
-            # Resize and normalize
             resized_frame = cv2.resize(gray_frame, (GRID_SIZE[0], GRID_SIZE[1]))
             normalized_frame = resized_frame.astype(np.float32) / 255.0
 
-            # Feed into the reaction-diffusion system
-            reaction_diffusion.V = normalized_frame.copy()
+            # --- Motion detection ---
+            diff_frame = cv2.absdiff(resized_frame, prev_gray_frame)
+            _, motion_mask = cv2.threshold(diff_frame, 25, 255, cv2.THRESH_BINARY)
 
+            # Normalize mask to 0-1 float
+            motion_mask_float = motion_mask.astype(np.float32) / 255.0
 
-        # Update RD and oscillate feed/kill rates
+            # --- Overlay motion into V ---
+            # Increase V where motion is detected
+            # Scale the motion influence to control intensity
+            motion_influence = 0.5
+            reaction_diffusion.V = np.clip(
+                reaction_diffusion.V + motion_mask_float * motion_influence,
+                0.0, 1.0
+            )
+
+            # Update previous frame for next motion detection step
+            prev_gray_frame = resized_frame.copy()
+
+        # --- Reaction-Diffusion Update ---
         reaction_diffusion.update(frame_count)
 
-        # Get pattern and resize to window
+        # --- Get pattern and display ---
         pattern = reaction_diffusion.get_pattern()
         pattern_resized = cv2.resize(pattern, WINDOW_SIZE, interpolation=cv2.INTER_NEAREST)
 
-        # Convert pattern to RGB surface for Pygame
+        # Convert to Pygame surface
         surf = pygame.surfarray.make_surface(np.stack([pattern_resized]*3, axis=-1))
 
         screen.blit(surf, (0, 0))
@@ -118,7 +136,6 @@ def run():
         frame_count += 1
         clock.tick(FPS)
 
-    # Release resources
     video_capture.release()
     pygame.quit()
 
